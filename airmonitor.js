@@ -1,277 +1,272 @@
-/* ----- MODULES TO IMPORT ----- */
-const express = require('express');
-const http = require('http');
-const socket = require('socket.io');
-const puppeteer = require('puppeteer-core');
-const fb_api = require('./facebook.js');
+/* ----- FACEBOOK API (2024-09-23 05:05) ----- */
+function facebook(browser) {
 
-/* ----- SERVERS ----- */
-const app = express();
-const server = http.createServer(app);
-const io = new socket.Server(server);
+    // MESSAGES: [role="main"] [role="grid"]>div>div>div>div[class]
 
-/* ----- CONFIGURATION ----- */
-const chrome = '/usr/bin/chromium';
-let data = [];
-const sleep = 1000;
+    this.page = null;
+    this.client = null;
+    this.status = 0; // No Page, At login page, At /messages
+    this.start = async () => {
+        this.page = await browser.newPage();
+        this.page.setDefaultTimeout(60000); // 1 minute Timeout
 
-/* ---- PUPPETEER ----- */
-var web, fb;
+        // Websocket interception
+        if (true) {
+            this.client = await this.page.target().createCDPSession();
+            await this.client.send('Network.enable');
 
-async function setup() {
-    web = await puppeteer.launch({
-        executablePath: chrome,
-        userDataDir: './userdat',
-        args: [ '--disable-infobars', '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu' ],
-        headless: true,
-    });
-    fb = new fb_api(web);
-    fb.start();
-    //io.emit('status', fb.status);
-    fb.recieve = async req => {
-        if ('text' in req && req.text.toLowerCase() == 'graph') await fb.send(req.user, {file: [{
-            type: 'canvas',
-            pass: data,
-            render: (can, x, data) => {
-                data = data.map(x=>[x[0],new Date(x[1])]);
-                console.log(data);
-                let w = 1280, h = 720;
-                let pad = 40; // Padding
-                let ypad = pad*2; // Line padding vertically
-                let xmin = pad*0.25; // Minimum Horizontal Graph Line
-                let adat = [];
-                let m = Math.max(100, ...data.map(x=>x[0]));
-                can.setAttribute('width', w+2*pad);
-                can.setAttribute('height', h+2*pad);
-                x.fillStyle = '#22262e';
-                x.fillRect(0, 0, w+2*pad, h+2*pad);
-
-                // Graph Background
-                x.strokeStyle = 'rgb(45,49,57)';
-                x.lineWidth = 5;
-                x.font = '18px Tahoma';
-                x.textAlign = 'end';
-                x.textBaseline = "middle";
-                x.lineCap = "round";
-                x.fillStyle = 'hsl(220 12% 40% / 1)';
-                var z = Math.ceil(h/ypad);
-                for(var i = 0; i <= z; i+=2) {
-                    x.fillText(Math.round(i*m/z), pad*0.8, h+pad-h*i/z);
-                    x.beginPath();
-                    x.moveTo(pad, h+pad-h*i/z);
-                    x.lineTo(w+pad, h+pad-h*i/z);
-                    x.stroke();
-                }
-                let min = new Date(new Date()-1);
-                let dif = 1;
-                if (data.length == 0) adat = [[0,min],[0,new Date()]];
-                else if (data.length == 1) {
-                    min = new Date(data[0][1]-1);
-                    adat = [[data[0][0],min],data[0]];
-                } else {
-                    min = data[0][1];
-                    dif = data[data.length-1][1]-min;
-                    let u = Math.ceil(xmin*data.length/w);
-                    adat = [];
-                    for(var i = 0; i < data.length; i += u) {
-                        var A = data[i];
-                        let n = 1;
-                        for (var j = 1; j < u && i+j < data.length; j++) {
-                            A[0] += data[i+j][0];
-                            n++;
-                        }
-                        A[0] /= n;
-                        adat.push(A);
-                    }
-                }
-                // Graph
-                x.strokeStyle = 'rgb(20,104,97)';
-                x.beginPath();
-                for (const a of adat) x[i ? 'lineTo' : 'moveTo'](pad+w*(a[1]-min)/dif, h+pad-a[0]/m*h);
-                x.stroke();
-                // Date
-                x.textAlign = 'start';
-                x.fillText(adat[0][1].getHours().toString().padStart(2,'0')+':'+adat[0][1].getMinutes().toString().padStart(2,'0'), pad, h+pad*1.5);
-                x.textAlign = 'end';
-                x.fillText(adat[adat.length-1][1].getHours().toString().padStart(2,'0')+':'+adat[adat.length-1][1].getMinutes().toString().padStart(2,'0'), w+pad, h+pad*1.5);
-            }
-        }]});
-        else if ('text' in req && req.text.toLowerCase() == 'quit') {
-            await fb.send(req.user, {text:'Good bye!'});
-            exit();
-        } else {
-            let tdif = d => d < 1000 ? `${d} miliseconds` : d < 60000 ? `${Math.floor(d/1000)} seconds` : d < 3600000 ? `${Math.floor(d/60000)} minutes` :  `${Math.floor(d/3600000)} hours`;
-            await fb.send(req.user, {text: data.length ? `Current measurement: ${Math.round(data[data.length-1][0],2)}\n(${tdif((new Date())-data[data.length-1][1])} ago)` : 'No data yet, connect to air sensor',});
-        }
-    }
-
-    /* ----- SOCKET ----- */
-    io.on('connection', sock => {
-        sock.emit('data', data);
-        sock.emit('status', fb.status);
-        sock.on('login', async form => {
-            sock.emit('login', 0);
-            let ok = await fb.login(form.user, form.pass, 'API');
-            sock.emit('login', ok ? 1 : -1);
-            sock.emit('status', fb.status);
-        });
-    });
-
-    /* ----- SERVER ----- */
-    app.get('/data', (req, res) => {
-        let ns = Object.keys(req.query).filter(x=>Number(x)!=NaN);
-        let n = ns.length ? Number(ns[0]) : Math.random()*100;
-        let d = [n, new Date()];
-        io.emit('data', [d]);
-        data.push(d);
-        res.send('done');
-    });
-    app.get('/', (req, res) => {
-        res.send(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>AirQuality</title>
-                <style>
-                    :focus { outline: none; }
-                    html, body { height: 100%; }
-                    body { display: grid; grid-template: 50px auto 50px / auto 50px; background-color: rgb(45,49,57); font-family: Tahoma; margin: 0; padding: 10px; box-sizing: border-box; }
-                    h1 { grid-area: 1 / 1; color: #fff; margin: 0 10px; line-height: 40px; }
-                    svg { padding: 5px; height: 30px; fill: #fff; float: left; margin-right: 10px; }
-                    button { grid-area: 1 / 2; background: none; color: #fff; border: 0; }
-                    button svg { display: none; }
-                    canvas { grid-area: 2 / 1 / span 1 / span 2; background-color: rgb(34,38,46); border-radius: 30px; width: 100%; height: 100%; max-width: calc(100vw - 10px); max-height: calc(100vh - 116px); }
-                    p { grid-area: 3 / 1 / span 1 / span 2; color: rgb(98,99,103); text-align: center; }
-                    form { grid-area: 2 / 1 / span 1 / span 2; background-color: rgb(34,38,46); border-radius: 30px; display: none; flex-direction: column; justify-content: center; padding: 50px; gap: 50px; }
-                    input { height: 30px; padding: 10px; line-height: 30px; font-size: 20px; background-color: #626367; border-radius: 10px; border: 0; color: #fff; }
-                    input::placeholder { color: #22262e; }
-                    input[type=submit] { height: 50px; color: #ddd; font-weight: bold; background-color: rgb(20,104,97); }
-                    h2 { color: #fff; text-align: center; }
-                    .flex { display: flex; }
-                    .block { display: block; }
-                </style>
-                <script src="/socket.io/socket.io.js"></script>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, minimum-scale=1.0">
-            </head>
-            <body>
-                <h1>
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--!Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.--><path d="M288 32c0 17.7 14.3 32 32 32l32 0c17.7 0 32 14.3 32 32s-14.3 32-32 32L32 128c-17.7 0-32 14.3-32 32s14.3 32 32 32l320 0c53 0 96-43 96-96s-43-96-96-96L320 0c-17.7 0-32 14.3-32 32zm64 352c0 17.7 14.3 32 32 32l32 0c53 0 96-43 96-96s-43-96-96-96L32 224c-17.7 0-32 14.3-32 32s14.3 32 32 32l384 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-32 0c-17.7 0-32 14.3-32 32zM128 512l32 0c53 0 96-43 96-96s-43-96-96-96L32 320c-17.7 0-32 14.3-32 32s14.3 32 32 32l128 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-32 0c-17.7 0-32 14.3-32 32s14.3 32 32 32z"/></svg>
-                    AirQuality
-                </h1>
-                <button>
-                    <svg class="block" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--!Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.--><path d="M224 256A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512l388.6 0c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304l-91.4 0z"/></svg>
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--!Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.--><path d="M575.8 255.5c0 18-15 32.1-32 32.1l-32 0 .7 160.2c0 2.7-.2 5.4-.5 8.1l0 16.2c0 22.1-17.9 40-40 40l-16 0c-1.1 0-2.2 0-3.3-.1c-1.4 .1-2.8 .1-4.2 .1L416 512l-24 0c-22.1 0-40-17.9-40-40l0-24 0-64c0-17.7-14.3-32-32-32l-64 0c-17.7 0-32 14.3-32 32l0 64 0 24c0 22.1-17.9 40-40 40l-24 0-31.9 0c-1.5 0-3-.1-4.5-.2c-1.2 .1-2.4 .2-3.6 .2l-16 0c-22.1 0-40-17.9-40-40l0-112c0-.9 0-1.9 .1-2.8l0-69.7-32 0c-18 0-32-14-32-32.1c0-9 3-17 10-24L266.4 8c7-7 15-8 22-8s15 2 21 7L564.8 231.5c8 7 12 15 11 24z"/></svg>
-                </button>
-                <canvas id="graph"></canvas>
-                <p>Not connected</p>
-                <form action="javascript:;" onsubmit="return login(this)">
-                    <h2>Login in Messenger</h2>
-                    <input name="user" placeholder="Username:"></input>
-                    <input name="pass" placeholder="Password:" type="password"></input>
-                    <input type="submit" value="Login"></input>
-                </form>
-                <script>
-                    var socket = io();
-                    var $ = x => document.querySelector(x);
-                    var x = $('#graph').getContext('2d');
-                    var data = [];
-                    var pad = 40; // Padding
-                    var ypad = pad*2; // Line padding vertically
-                    var xmin = pad*0.25; // Minimum Horizontal Graph Line
-                    var adat = data; // Appered Data
-
-                    socket.on('connect', () => $('p').innerText = 'Connected');
-                    socket.on('disconnect', () => $('p').innerText = 'Disconnected');
-                    socket.on('data', d => data = data.concat(d.map(x=>[x[0],new Date(x[1])])));
-                    socket.on('login', n => {
-                        $('h2').innerText = ['Failed to Login','Logging...','Logged in'][n+1];
-                        if (n == 1 && $('form').classList.contains('flex')) $('button').click();
-                    });
-                    socket.on('status', n => {
-                        $('h2').innerText = ['Setting up', 'Login into Facebook', 'Logged in'][n];
-                    });
-
-                    function draw() {
-                        var box = $('#graph').getBoundingClientRect();
-                        var h = box.height-2*pad;
-                        var w = box.width-2*pad;
-                        var m = Math.max(100, ...data.map(x=>x[0]));
-
-                        // Canvas
-                        $('#graph').setAttribute('width', box.width);
-                        $('#graph').setAttribute('height', box.height);
-                        x.clearRect(0, 0, box.width, box.height);
-
-                        // Graph Background
-                        x.strokeStyle = 'rgb(45,49,57)';
-                        x.lineWidth = 5;
-                        x.font = '18px Tahoma';
-                        x.textAlign = 'end';
-                        x.textBaseline = "middle";
-                        x.lineCap = "round";
-                        x.fillStyle = 'hsl(220 12% 40% / 1)';
-                        var z = Math.ceil(h/ypad);
-                        for(var i = 0; i <= z; i+=2) {
-                            x.fillText(Math.round(i*m/z), pad*0.8, h+pad-h*i/z);
-                            x.beginPath();
-                            x.moveTo(pad, h+pad-h*i/z);
-                            x.lineTo(w+pad, h+pad-h*i/z);
-                            x.stroke();
-                        }
-                        let min = new Date(new Date()-1);
-                        let dif = 1;
-                        if (data.length == 0) adat = [[0,min],[0,new Date()]];
-                        else if (data.length == 1) {
-                            min = new Date(data[0][1]-1);
-                            adat = [[data[0][0],min],data[0]];
-                        } else {
-                            min = data[0][1];
-                            dif = data[data.length-1][1]-min;
-                            let u = Math.ceil(xmin*data.length/w);
-                            adat = [];
-                            for(var i = 0; i < data.length; i += u) {
-                                var A = data[i];
-                                let n = 1;
-                                for (var j = 1; j < u && i+j < data.length; j++) {
-                                    A[0] += data[i+j][0];
-                                    n++;
-                                }
-                                A[0] /= n;
-                                adat.push(A);
+            // Listen for WebSocket messages
+            this.client.on('Network.webSocketFrameReceived', (event) => {
+                try {
+                    let data = atob(event.response.payloadData);
+                    if (data.indexOf('/ls_resp') == 5) {
+                        let obj = JSON.parse(data.slice(15));
+                        obj.payload = JSON.parse(obj.payload);
+                        let rec = obj.payload.step[1][2][2][1][2][2].filter(x=>x.length>1).map(x=>x[1]);
+                        let ans = {};
+                        for (const info of rec) {
+                            if (info[1] == 'updateThreadSnippet') {
+                                if (info[5][1] != info[2][1]) return; // Self message
+                                ans.text = info[3];
+                                ans.user = Number(info[5][1]);
+                            } else if (info[1] == 'insertBlobAttachment') {
+                                if (!('file' in ans)) ans.file = [];
+                                delete ans.text;
+                                ans.file.push(info[5]);
                             }
                         }
-                        // Graph
-                        x.strokeStyle = 'rgb(20,104,97)';
-                        x.beginPath();
-                        for (const a of adat) x[i ? 'lineTo' : 'moveTo'](pad+w*(a[1]-min)/dif, h+pad-a[0]/m*h);
-                        x.stroke();
-                        // Date
-                        x.textAlign = 'start';
-                        x.fillText(adat[0][1].getHours().toString().padStart(2,'0')+':'+adat[0][1].getMinutes().toString().padStart(2,'0'), pad, h+pad*1.5);
-                        x.textAlign = 'end';
-                        x.fillText(adat[adat.length-1][1].getHours().toString().padStart(2,'0')+':'+adat[adat.length-1][1].getMinutes().toString().padStart(2,'0'), w+pad, h+pad*1.5);
+                        this.recieve(ans);
                     }
-                    setInterval(draw, 1000/30);
+                } catch (e) {
+                }
+            });
+        }
 
-                    $('button').onclick = () => {
-                        $('form').classList.toggle('flex');
-                        $('button svg:first-child').classList.toggle('block');
-                        $('button svg:last-child').classList.toggle('block');
-                    };
+        // Load messages
+        await this.page.goto('https://www.facebook.com/messages');
+        const profile = await this.page.$('[aria-label="Your profile"]');
+        //const title = await this.page.title();
+        //this.status = ['Log in to Facebook','Facebook – log in or sign up','Log into Facebook'].includes(title) ? 1 : 2;
+        this.status = profile ? 2 : 1;
+    };
+    this.close = () => {
+        if (this.status != 0) this.page.close();
+    };
+    this.error = [];
+    this.logout = async () => {
+        // Error Capturing
+        if (this.status == 0) this.error.append('Setup webpage first! "this.start()"');
+        else if (this.status == 1) this.error.append('User is not logged in!');
+        if (this.status != 2) return false;
 
-                    function login(form) {
-                        $('h2').innerText = 'Loading...';
-                        socket.emit('login', {
-                            user: $('[name=user]').value,
-                            pass: $('[name=pass]').value,
-                        });
-                        return false;
-                    }
-                </script>
-            </body>
-            </html>
-        `);
-    });
-    server.listen(80, () => console.log('Hosting'));
+        await this.page.click('[aria-label="Your profile"]');
+        await this.page.waitForSelector('[role="list"] div[data-visualcompletion="ignore-dynamic"]:last-child');
+        await this.page.click('[role="list"] div[data-visualcompletion="ignore-dynamic"]:last-child');
+        await this.page.waitForNavigation({ waitUntil: 'networkidle0' });
+        this.status = 1;
+        return true;
+    };
+    this.login = async (user, pass, name) => {
+        // Error Capturing
+        if (this.status == 0) this.error.append('Setup webpage first! "this.start()"');
+        else if (this.status == 2) this.error.append('User is already logged in!');
+        if (this.status != 1) return false;
+
+        // Previous confirmation reset like "Not Me" and "Login through password"
+        await this.page.waitForSelector('[method=post] .clearfix ._aklt, #not_me_link,#email');
+        const aklt = await this.page.$('[method=post] .clearfix ._aklt');
+        const not_me = await this.page.$('#not_me_link');
+        if (aklt || not_me) await Promise.all([
+            this.page.click(aklt ? '[method=post] .clearfix ._aklt' : '#not_me_link'),
+            this.page.waitForNavigation({ waitUntil: 'networkidle0' })
+        ]);
+
+        // Entering username and password
+        await this.page.evaluate((user, pass) => {
+            document.getElementById('email').value = user;
+            document.getElementById('pass').value = pass;
+            document.querySelector('[type=submit]').click();
+        }, user, pass);
+
+        // Getting result
+        await this.page.waitForNavigation({ waitUntil: 'networkidle0' });
+        await this.page.waitForSelector('[method=post] .clearfix ._aklt, #not_me_link, #email._9ay4, [aria-label="Your profile"]');
+        const profile = await this.page.$('[aria-label="Your profile"]');
+        const not_me2 = await this.page.$('#not_me_link');
+        if (profile) {
+            this.status = 2;
+            if (name) {
+                await this.page.click('[aria-label="Your profile"]');
+                //await this.page.waitForNavigation({ waitUntil: 'networkidle0' });
+                await this.page.waitForSelector('[aria-label="Your profile"][role="dialog"]');
+                const nprof = await this.page.$(`[aria-label="Switch to ${name}"]`);
+                if (nprof) {
+                    await this.page.click(`[aria-label="Switch to ${name}"]`);
+                    await this.page.waitForNavigation({ waitUntil: 'networkidle0' });
+                    await this.page.goto('https://www.facebook.com/messages');
+                } else return false;
+            }
+            //await this.page.goto('https://www.facebook.com/messages');
+            //await this.page.waitForNavigation({ waitUntil: 'networkidle0' });
+            return true;
+        }
+        if (not_me2) await this.page.click('#not_me_link');
+        return false;
+    };
+    this.send = async (chat, data={}) => {
+        // Error Capturing
+        if (this.status == 0) this.error.append('Setup webpage first! "this.start()"');
+        else if (this.status == 1) this.error.append('Login first!');
+        if (this.status != 2) return false;
+
+        // Open chat area
+        if (this.page.url().split('/').length < 6 || chat != this.page.url().split('/')[5]) {
+            await this.page.goto(`https://www.facebook.com/messages/t/${chat}`);
+            await this.page.waitForSelector('[aria-label="Send a like"]');
+        }
+
+        // Send a like
+        if (Object.keys(data).length == 0) {
+            this.page.click('[aria-label="Send a like"]');
+            return true;
+        }
+
+        // Send a sticker
+        if ('sticker' in data) {
+            await this.page.click('[aria-label="Choose a sticker"]');
+            await this.page.waitForSelector('[aria-label="Search stickers"]');
+            await this.page.click('[aria-label="Search stickers"]');
+            await this.page.evaluate(async sticker => {
+                await navigator.clipboard.writeText(sticker);
+            }, data.sticker);
+            await this.page.keyboard.down('Control');
+            await this.page.keyboard.press('KeyV');
+            await this.page.keyboard.up('Control');
+            await this.page.waitForSelector('#js_s table td [aria-label]');
+            await this.page.click('#js_s table td [aria-label]');
+        }
+
+        // Send files
+        if ('file' in data) {
+            let raw = data.file.filter(p => typeof p == 'string');
+            if (raw.length) {
+                await this.page.waitForSelector('input[type="file"]');
+                const input = await this.page.$('input[type="file"]');
+                await input.uploadFile(...data.file);
+                await this.page.evaluate(() => {
+                    const input = document.querySelector('input[type="file"]');
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+            }
+            let obj = data.file.filter(p => typeof p == 'object');
+            for (const o of obj) {
+                await this.page.click('[aria-label="Message"]');
+                if (o.type == 'canvas') {
+                    let b64 = '';
+                    /*if (typeof img == 'string') {
+                        const res = await fetch(img);
+                        if (!res.ok) continue;
+                        const buffer = Buffer.from(await res.arrayBuffer());
+                        b64 = `data:${res.headers.get('content-type')};base64,${buffer.toString('base64')}`;
+                    }*/
+
+                    await this.page.evaluate(async (render_str, pass) => new Promise(async (res,rej) => {
+                        let render = eval(`(${render_str})`);
+                        let c = document.createElement('canvas');
+                        let x = c.getContext('2d');
+                        let t = 'image/png';
+                        if (typeof render == 'function') {
+                            await render(c, x, JSON.parse(pass));
+                        } else {
+                            let i = await new Promise((res,rej) => {
+                                let i = new Image();
+                                i.src = render;
+                                i.onload = () => res(i);
+                                i.onerror = e => {
+                                    throw e;
+                                };
+                            });
+                            c.setAttribute('width', i.width);
+                            c.setAttribute('height', i.height);
+                            x.drawImage(i, 0, 0);
+                        }
+                        c.toBlob(async blob => {
+                            const item = new ClipboardItem({ 'image/png': blob });
+                            navigator.clipboard.write([item]).then(res).catch(rej);
+                        }, 'image/png');
+                    }), o.render.toString(), JSON.stringify(o.pass));/*typeof img == 'function' ? img.toString() : `"${b64.replaceAll('\\','\\\\').replaceAll('"','\\"')}"`);*/
+                    await this.page.keyboard.down('Control');
+                    await this.page.keyboard.press('KeyV');
+                    await this.page.keyboard.up('Control');
+                }
+
+            }
+        }
+
+        // Paste a text
+        if ('text' in data) {
+            await this.page.click('[aria-label="Message"]');
+            await this.page.evaluate(async text => {
+                await navigator.clipboard.writeText(text);
+            }, data.text);
+            await this.page.keyboard.down('Control');
+            await this.page.keyboard.press('KeyV');
+            await this.page.keyboard.up('Control');
+        }
+
+        // Paste an image
+        /*
+        if ('img' in data) for (const img of data.img) {
+            await this.page.click('[aria-label="Message"]');
+            let b64 = '';
+            if (typeof img == 'string') {
+                const res = await fetch(img);
+                if (!res.ok) continue;
+                const buffer = Buffer.from(await res.arrayBuffer());
+                b64 = `data:${res.headers.get('content-type')};base64,${buffer.toString('base64')}`;
+            }
+
+            await this.page.evaluate(async render_str => new Promise(async (res,rej) => {
+                let render = eval(`(${render_str})`);
+                let c = document.createElement('canvas');
+                let x = c.getContext('2d');
+                let t = 'image/png';
+                if (typeof render == 'function') {
+                    await render(c, x);
+                } else {
+                    let i = await new Promise((res,rej) => {
+                        let i = new Image();
+                        i.src = render;
+                        i.onload = () => res(i);
+                        i.onerror = e => {
+                            throw e;
+                        };
+                    });
+                    c.setAttribute('width', i.width);
+                    c.setAttribute('height', i.height);
+                    x.drawImage(i, 0, 0);
+                }
+                c.toBlob(async blob => {
+                    const item = new ClipboardItem({ 'image/png': blob });
+                    navigator.clipboard.write([item]).then(res).catch(rej);
+                }, 'image/png');
+            }), typeof img == 'function' ? img.toString() : `"${b64.replaceAll('\\','\\\\').replaceAll('"','\\"')}"`);
+            await this.page.keyboard.down('Control');
+            await this.page.keyboard.press('KeyV');
+            await this.page.keyboard.up('Control');
+        }*/
+
+        // Send paste things
+        await this.page.waitForSelector('[aria-label="Press enter to send"]');
+        await this.page.click('[aria-label="Press enter to send"]');
+
+        // Wait for message to be sent
+        await this.page.waitForFunction(() => {
+            return document.querySelector('[role="main"] [role="grid"]>div>div:last-child>div>div[class] [data-scope="messages_table"]>*:last-child').innerText == 'Sent';
+        });
+
+        return true;
+    };
+    this.recieve = data => {};
 }
-setup();
+if (typeof module !== 'undefined' && module.exports) module.exports = facebook;
