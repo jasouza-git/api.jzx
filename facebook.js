@@ -14,15 +14,6 @@ function facebook(browser) {
         if (true) {
             this.client = await this.page.target().createCDPSession();
             await this.client.send('Network.enable');
-            /*
-            this.client.on('Network.webSocketCreated', (event) => {
-                console.log('WebSocket Created:', event);
-            });
-
-            // Listen for WebSocket connection opening
-            this.client.on('Network.webSocketWillSendHandshakeRequest', (event) => {
-                console.log('WebSocket Handshake Request:', event);
-            });*/
 
             // Listen for WebSocket messages
             this.client.on('Network.webSocketFrameReceived', (event) => {
@@ -48,18 +39,15 @@ function facebook(browser) {
                     }
                 } catch (e) {
                 }
-                //console.log('WebSocket Frame Received:', event.response.payloadData);
             });
-        /*
-            this.client.on('Network.webSocketFrameSent', (event) => {
-                console.log('WebSocket Frame Sent:', event.response.payloadData);
-            });*/
         }
 
         // Load messages
         await this.page.goto('https://www.facebook.com/messages');
-        const title = await this.page.title();
-        this.status = title == 'Log in to Facebook' || title == 'Facebook – log in or sign up' ? 1 : 2;
+        const profile = await this.page.$('[aria-label="Your profile"]');
+        //const title = await this.page.title();
+        //this.status = ['Log in to Facebook','Facebook – log in or sign up','Log into Facebook'].includes(title) ? 1 : 2;
+        this.status = profile ? 2 : 1;
     };
     this.close = () => {
         if (this.status != 0) this.page.close();
